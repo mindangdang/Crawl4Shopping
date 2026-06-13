@@ -4,64 +4,81 @@ import re
 from urllib.parse import urlparse
 import curl_cffi.requests as requests
 import json
+import cloudscraper
+from curl_cffi.requests.errors import RequestsError
+import time
+import random
 
 def get_html_from_url(url):
     parsed_url = urlparse(url)
     domain = parsed_url.netloc
     origin = f"{parsed_url.scheme}://{domain}"
 
-    # 크롬 브라우저와 완벽히 일치하도록 헤더의 대소문자 및 속성 세팅
-    headers = {
+    # 1. 최신 Chrome의 실제 헤더 순서와 구조 모사
+    # curl_cffi 내부에서 자동으로 정렬 및 보강되지만, 기본 값을 견고하게 세팅합니다.
+    custom_headers = {
         "host": domain,
         "connection": "keep-alive",
         "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
         "accept-language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-        "accept-encoding": "gzip, deflate, br, zstd", # zstd 추가로 실제 브라우저 모사 강화
-        "referer": f"{origin}/", # 홈에서 링크를 타고 온 것처럼 속임
-        "sec-ch-ua": '"Not/A)Brand";v="99", "Google Chrome";v="124", "Chromium";v="124"',
+        "referer": f"{origin}/",
+        "sec-ch-ua": '"Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"',
         "sec-ch-ua-mobile": "?0",
         "sec-ch-ua-platform": '"Windows"',
         "sec-fetch-dest": "document",
         "sec-fetch-mode": "navigate",
-        "sec-fetch-site": "same-origin", # Referer를 주었으므로 same-origin이 일치함
+        "sec-fetch-site": "same-origin",
         "sec-fetch-user": "?1",
-        "upgrade-insecure-requests": "1",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        "upgrade-insecure-requests": "1"
     }
-    
+
     try:
-        session = requests.Session(impersonate="chrome124")
-        
-        try:
-            pre_headers = headers.copy()
-            pre_headers["sec-fetch-site"] = "none"
-            pre_headers.pop("referer", None)
+        # 2. curl_cffi 세션 생성 (HTTP/2 및 Chrome TLS 핑거프린트 완전 모사)
+        # impersonate='chrome' 옵션이 JA3/JA4 핑거프린트와 HTTP/2 세팅을 완전히 실제 크롬처럼 만들어줍니다.
+        with requests.Session(impersonate="chrome") as session:
             
-            # 메인 홈을 먼저 찔러서 세션 쿠키 및 초기 방화벽 검증 통과
-            session.get(f"{origin}/", headers=pre_headers, timeout=5)
-            # 인간적인 봇 차단 회피를 위한 미세한 Jitter(지연) 추가
-            time.sleep(random.uniform(0.3, 0.8))
-        except Exception:
-            pass 
+            # [1단계] 메인 홈 호출 및 검증 (쿠키 획득 및 챌린지 우회)
+            try:
+                pre_headers = custom_headers.copy()
+                pre_headers["sec-fetch-site"] = "none"
+                pre_headers.pop("referer", None)
+                
+                print(f"[정보] 1단계: 메인 홈 쿠키 굽기 시작 ({origin}/)")
+                pre_response = session.get(f"{origin}/", headers=pre_headers, timeout=10)
+                
+                # 1단계 실패 조건 검증 (403, 503 등으로 막혔다면 2단계를 진행할 이유가 없음)
+                if pre_response.status_code >= 400:
+                    print(f"[경고] 1단계 메인 홈 접속 실패 (상태 코드: {pre_response.status_code}). 우회를 중단합니다.")
+                    return None
+                    
+            except RequestsError as e:
+                print(f"[에러] 1단계 네트워크/WAF 차단 발생: {e}")
+                return None
             
-        # 실제 상품 상세 페이지 요청
-        response = session.get(url, headers=headers, timeout=15)
-        
-        # 상태 코드 및 AntiBot 시그니처 검증 
-        html_lower = response.text.lower()
-        if "cf-browser-verification" in html_lower or "just a moment..." in html_lower:
-            print(f"[차단 감지] Cloudflare 챌린지 페이지에 걸렸습니다. (상태 코드: {response.status_code})")
-            return None
+            # [행동 패턴 제어] 사람의 행동과 유사하게 타임아웃 지연 (지연 시간 다각화)
+            # 고정된 패턴을 피하기 위해 조금 더 유연한 대기 시간을 가집니다.
+            time.sleep(random.uniform(1.5, 3.5))
             
-        if response.status_code == 200:
-            print(f"[성공] HTML 수집 완료! ({url})")
-            return response.text
-        else:
-            print(f"[실패] HTTP 상태 코드 {response.status_code}")
-            return None
+            # [2단계] 획득한 쿠키 권한을 가지고 실제 상세 페이지 요청
+            print(f"[정보] 2단계: 실제 타겟 페이지 요청 ({url})")
+            response = session.get(url, headers=custom_headers, timeout=15)
             
+            # 상태 코드 확인
+            if response.status_code == 200:
+                print(f"[성공] 최신 WAF 우회 및 HTML 수집 완료 ({url})")
+                return response.text
+            else:
+                print(f"[실패] 최종 HTTP 상태 코드: {response.status_code}")
+                # Cloudflare Turnstile 등에 걸렸을 때의 상태 코드 대응 (403, 503)
+                if response.status_code in [403, 503]:
+                    print("[힌트] 고도화된 행동 분석(Turnstile) 혹은 IP 평판 차단 가능성이 있습니다.")
+                return None
+                
+    except RequestsError as e:
+        print(f"[에러] curl_cffi 구동 중 치명적 오류: {e}")
+        return None
     except Exception as e:
-        print(f"[에러] 네트워크 또는 curl_cffi 구동 오류: {e}")
+        print(f"[에러] 예기치 못한 시스템 오류: {e}")
         return None
 
 def extract_product__info_from_html(html_content):
@@ -228,15 +245,51 @@ def parse_musinsa_html(html_content):
         print(f"[오류] 파싱 중 예상치 못한 에러 발생: {e}")
         return None
 
+def parse_opengraph_from_html(html_content):
+    if not html_content:
+        return None
+
+    soup = BeautifulSoup(html_content, "html.parser")
+    
+    # OpenGraph 메타 태그 검색
+    # <meta property="og:..." content="..."> 구조를 타겟팅합니다.
+    meta_tags = soup.find_all("meta", property=lambda x: x and x.startswith("og:"))
+    
+    # 데이터를 담을 딕셔너리 초기화
+    og_data = {}
+    
+    # 발견된 og 태그들을 순회하며 key-value 형태로 저장
+    for tag in meta_tags:
+        property_name = tag.get("property")
+        content_value = tag.get("content")
+        
+        if property_name and content_value:
+            # "og:" 접두사를 제외한 키값만 저장 (예: og:title -> title)
+            key = property_name.replace("og:", "")
+            og_data[key] = content_value.strip()
+            
+    # 트위터 카드나 일반 description 등 유용한 메타 정보가 있다면 보완용으로 추가 추출
+    if "description" not in og_data:
+        desc_tag = soup.find("meta", attrs={"name": "description"})
+        if desc_tag:
+            og_data["description"] = desc_tag.get("content", "").strip()
+
+    if not og_data:
+        print("[경고] HTML 내에서 OpenGraph 메타 태그를 찾지 못했습니다.")
+        return None
+        
+    print("[성공] OpenGraph 데이터 추출 완료")
+    return og_data
+
 if __name__ == "__main__":
     
     #무신사, 후르츠 성공.
-    url = "https://fetching.co.kr/product/52615440/V-S1%20%EC%8A%A4%EB%8B%88%EC%BB%A4%EC%A6%88%20%EB%B8%94%EB%9E%99"
-    html_content = get_html_from_url(url)
-    result = extract_product__info_from_html(html_content)
-    print(result)
+    #url = "https://fetching.co.kr/product/52615440/V-S1%20%EC%8A%A4%EB%8B%88%EC%BB%A4%EC%A6%88%20%EB%B8%94%EB%9E%99"
+    #html_content = get_html_from_url(url)
+    #result = extract_product__info_from_html(html_content)
+    #print(result)
 
-    #url = "https://www.musinsa.com/products/3513309"
-    #html_from_curl_cffi = get_html_from_url(url)
-    #result = parse_musinsa_html(html_from_curl_cffi)
-    #print(json.dumps(result, indent=4, ensure_ascii=False))
+    url = "https://www.musinsa.com/products/3513309"
+    html_from_curl_cffi = get_html_from_url(url)
+    result = parse_musinsa_html(html_from_curl_cffi)
+    print(json.dumps(result, indent=4, ensure_ascii=False))
