@@ -13,12 +13,10 @@ def get_html_from_url(url):
     parsed_url = urlparse(url)
     domain = parsed_url.netloc
     origin = f"{parsed_url.scheme}://{domain}"
+    target_chrome = "chrome120"
 
-    # 1. 최신 Chrome의 실제 헤더 순서와 구조 모사
-    # curl_cffi 내부에서 자동으로 정렬 및 보강되지만, 기본 값을 견고하게 세팅합니다.
+    # 1.Chrome의 실제 헤더 순서와 구조 모사
     custom_headers = {
-        "host": domain,
-        "connection": "keep-alive",
         "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
         "accept-language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
         "referer": f"{origin}/",
@@ -32,10 +30,12 @@ def get_html_from_url(url):
         "upgrade-insecure-requests": "1"
     }
 
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+
     try:
         # 2. curl_cffi 세션 생성 (HTTP/2 및 Chrome TLS 핑거프린트 완전 모사)
-        # impersonate='chrome' 옵션이 JA3/JA4 핑거프린트와 HTTP/2 세팅을 완전히 실제 크롬처럼 만들어줍니다.
-        with requests.Session(impersonate="chrome") as session:
+        # impersonate='chrome' 옵션이 JA3/JA4 핑거프린트와 HTTP/2 세팅을 완전히 실제 크롬처럼 만듬.
+        with requests.Session(impersonate=target_chrome, proxies=proxies) as session:
             
             # [1단계] 메인 홈 호출 및 검증 (쿠키 획득 및 챌린지 우회)
             try:
@@ -81,7 +81,8 @@ def get_html_from_url(url):
         print(f"[에러] 예기치 못한 시스템 오류: {e}")
         return None
 
-def extract_product__info_from_html(html_content):
+############################################# html parsing function ##################################################
+def parse_html_basic(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
     
     product_info = {
@@ -125,7 +126,7 @@ def extract_product__info_from_html(html_content):
 
     return product_info
 
-def extract_product__info_with_json_ld(html_content):
+def parse_html_jwith_son_ld(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
     
     product_info = {
@@ -188,6 +189,45 @@ def extract_product__info_with_json_ld(html_content):
 
     return product_info
 
+def parse_html_with_opengraph(html_content):
+    if not html_content:
+        return None
+
+    soup = BeautifulSoup(html_content, "html.parser")
+    
+    # OpenGraph 메타 태그 검색
+    # <meta property="og:..." content="..."> 구조를 타겟팅합니다.
+    meta_tags = soup.find_all("meta", property=lambda x: x and x.startswith("og:"))
+    
+    # 데이터를 담을 딕셔너리 초기화
+    og_data = {}
+    
+    # 발견된 og 태그들을 순회하며 key-value 형태로 저장
+    for tag in meta_tags:
+        property_name = tag.get("property")
+        content_value = tag.get("content")
+        
+        if property_name and content_value:
+            # "og:" 접두사를 제외한 키값만 저장 (예: og:title -> title)
+            key = property_name.replace("og:", "")
+            og_data[key] = content_value.strip()
+            
+    # 트위터 카드나 일반 description 등 유용한 메타 정보가 있다면 보완용으로 추가 추출
+    if "description" not in og_data:
+        desc_tag = soup.find("meta", attrs={"name": "description"})
+        if desc_tag:
+            og_data["description"] = desc_tag.get("content", "").strip()
+
+    if not og_data:
+        print("[경고] HTML 내에서 OpenGraph 메타 태그를 찾지 못했습니다.")
+        return None
+        
+    print("[성공] OpenGraph 데이터 추출 완료")
+    return og_data
+
+
+############################################# custom parsing fuction ##################################################
+
 def parse_musinsa_html(html_content):
     if not html_content:
         return None
@@ -245,51 +285,14 @@ def parse_musinsa_html(html_content):
         print(f"[오류] 파싱 중 예상치 못한 에러 발생: {e}")
         return None
 
-def parse_opengraph_from_html(html_content):
-    if not html_content:
-        return None
 
-    soup = BeautifulSoup(html_content, "html.parser")
-    
-    # OpenGraph 메타 태그 검색
-    # <meta property="og:..." content="..."> 구조를 타겟팅합니다.
-    meta_tags = soup.find_all("meta", property=lambda x: x and x.startswith("og:"))
-    
-    # 데이터를 담을 딕셔너리 초기화
-    og_data = {}
-    
-    # 발견된 og 태그들을 순회하며 key-value 형태로 저장
-    for tag in meta_tags:
-        property_name = tag.get("property")
-        content_value = tag.get("content")
-        
-        if property_name and content_value:
-            # "og:" 접두사를 제외한 키값만 저장 (예: og:title -> title)
-            key = property_name.replace("og:", "")
-            og_data[key] = content_value.strip()
-            
-    # 트위터 카드나 일반 description 등 유용한 메타 정보가 있다면 보완용으로 추가 추출
-    if "description" not in og_data:
-        desc_tag = soup.find("meta", attrs={"name": "description"})
-        if desc_tag:
-            og_data["description"] = desc_tag.get("content", "").strip()
 
-    if not og_data:
-        print("[경고] HTML 내에서 OpenGraph 메타 태그를 찾지 못했습니다.")
-        return None
-        
-    print("[성공] OpenGraph 데이터 추출 완료")
-    return og_data
+
+########################################################################################################################
+
 
 if __name__ == "__main__":
-    
-    #무신사, 후르츠 성공.
-    #url = "https://fetching.co.kr/product/52615440/V-S1%20%EC%8A%A4%EB%8B%88%EC%BB%A4%EC%A6%88%20%EB%B8%94%EB%9E%99"
-    #html_content = get_html_from_url(url)
-    #result = extract_product__info_from_html(html_content)
-    #print(result)
 
-    url = "https://www.musinsa.com/products/3513309"
+    url_dict = {'musinsa' : "https://www.musinsa.com/products/3513309", 'fetching' : , 'fruitsfamily' : }
+    url = url_dict[]
     html_from_curl_cffi = get_html_from_url(url)
-    result = parse_musinsa_html(html_from_curl_cffi)
-    print(json.dumps(result, indent=4, ensure_ascii=False))
