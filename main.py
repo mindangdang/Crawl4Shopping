@@ -13,14 +13,15 @@ def get_html_from_url(url):
     parsed_url = urlparse(url)
     domain = parsed_url.netloc
     origin = f"{parsed_url.scheme}://{domain}"
-    target_chrome = "chrome120"
+    target_chrome = "chrome124"
+    proxy = None
 
     # 1.Chrome의 실제 헤더 순서와 구조 모사
     custom_headers = {
         "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
         "accept-language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
         "referer": f"{origin}/",
-        "sec-ch-ua": '"Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"',
+        "sec-ch-ua": '"Google Chrome";v="124", "Not:A-Brand";v="8", "Chromium";v="124"',
         "sec-ch-ua-mobile": "?0",
         "sec-ch-ua-platform": '"Windows"',
         "sec-fetch-dest": "document",
@@ -225,7 +226,6 @@ def parse_html_with_opengraph(html_content):
     print("[성공] OpenGraph 데이터 추출 완료")
     return og_data
 
-
 ############################################# custom parsing fuction ##################################################
 
 def parse_musinsa_html(html_content):
@@ -285,14 +285,17 @@ def parse_musinsa_html(html_content):
         print(f"[오류] 파싱 중 예상치 못한 에러 발생: {e}")
         return None
 
-
-
-
 ########################################################################################################################
-
 
 if __name__ == "__main__":
 
-    url_dict = {'musinsa' : "https://www.musinsa.com/products/3513309", 'fetching' : , 'fruitsfamily' : }
-    url = url_dict[]
-    html_from_curl_cffi = get_html_from_url(url)
+    url_dict = {'musinsa' : "https://www.musinsa.com/products/3513309", 
+                'fetching' : 'https://fetching.co.kr/product/58383691/%EC%8A%A4%EB%8B%88%EC%BB%A4%EC%A6%88%20V-S1%20%EC%BB%A8%ED%83%9D%ED%8A%B8%20%EB%B8%94%EB%9E%99', 
+                'fruitsfamily' : 'https://fruitsfamily.com/product/5qjtk/12fw-%EB%B0%B1%EC%8A%A4%ED%8B%B0%EC%B9%98-%EB%B8%8C%EC%9D%B4%EB%84%A5-%EB%8B%88%ED%8A%B8'
+                }
+    url = url_dict['musinsa']
+    html_content = get_html_from_browser(url) # get_html_from_url(url) # get_html_from_browser(url)
+    result = parse_musinsa_html(html_content)
+    print(result)
+
+    
