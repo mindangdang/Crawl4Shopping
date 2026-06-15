@@ -8,6 +8,9 @@ import cloudscraper
 from curl_cffi.requests.errors import RequestsError
 import time
 import random
+import asyncio
+import sys
+import nodriver as uc
 
 def get_html_from_url(url):
     parsed_url = urlparse(url)
@@ -82,6 +85,30 @@ def get_html_from_url(url):
         print(f"[에러] 예기치 못한 시스템 오류: {e}")
         return None
 
+async def get_html_from_browser(url: str):
+    # 코드스페이스(리눅스)에 설치된 크롬의 기본 경로
+    chrome_path = "/usr/bin/google-chrome"
+    
+    print("[정보] 코드스페이스 환경에서 크롬 가동 중...")
+    
+    browser = await uc.start(
+        browser_executable_path=chrome_path,
+        no_sandbox=True, # 리눅스 환경에서 가동하기 위해 sandbox를 꺼줍니다.
+        headless=True
+    )
+
+    try:
+        print("[정보] 타겟 페이지 이동 중...")
+        page = await browser.get(url)
+
+        await asyncio.sleep(5)
+
+        html = await page.get_content()
+        print(f"[성공] HTML 수집 완료! (길이: {len(html)}자)")
+        return html
+    finally:
+        browser.stop()
+        
 ############################################# html parsing function ##################################################
 def parse_html_basic(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
@@ -294,8 +321,13 @@ if __name__ == "__main__":
                 'fruitsfamily' : 'https://fruitsfamily.com/product/5qjtk/12fw-%EB%B0%B1%EC%8A%A4%ED%8B%B0%EC%B9%98-%EB%B8%8C%EC%9D%B4%EB%84%A5-%EB%8B%88%ED%8A%B8'
                 }
     url = url_dict['musinsa']
-    html_content = get_html_from_browser(url) # get_html_from_url(url) # get_html_from_browser(url)
+    html_content = get_html_from_url(url) 
+    #html_content = uc.loop().run_until_complete(get_html_from_browser(url))
+    print(html_content)
     result = parse_musinsa_html(html_content)
     print(result)
 
-    
+
+
+
+
