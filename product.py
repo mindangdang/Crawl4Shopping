@@ -86,28 +86,49 @@ def get_html_from_url(url):
         return None
 
 async def get_html_from_browser(url: str):
-    # 코드스페이스(리눅스)에 설치된 크롬의 기본 경로
     chrome_path = "/usr/bin/google-chrome"
-    
     print("[정보] 코드스페이스 환경에서 크롬 가동 중...")
     
-    browser = await uc.start(
-        browser_executable_path=chrome_path,
-        no_sandbox=True, # 리눅스 환경에서 가동하기 위해 sandbox를 꺼줍니다.
-        headless=True
-    )
+    # 1. Config 객체를 이용해 도커/리눅스 환경 최적화 인자 주입
+    config = uc.Config()
+    config.browser_executable_path = chrome_path
+    
+    # nodriver 전용 보안 속성 해제
+    config.sandbox = False
+    config.headless = True
+    
+    # [핵심] 리눅스 컨테이너 환경에서 CDP 연결 안정화를 위한 필수 인자들
+    config.add_argument("--disable-dev-shm-usage")
+    config.add_argument("--disable-gpu")
+    config.add_argument("--remote-debugging-port=9222") # 디버깅 포트 고정
+    config.add_argument("--remote-debugging-address=0.0.0.0") # 바인딩 주소 확장
+    
+    # d-bus 관련 무의미한 에러 로그가 파이썬 스트림을 방해하지 않도록 차단
+    config.add_argument("--log-level=3") 
 
     try:
+        # 2. 브라우저 시작
+        browser = await uc.start(config)
+        
         print("[정보] 타겟 페이지 이동 중...")
         page = await browser.get(url)
 
+        # 페이지가 완전히 로드될 때까지 충분히 대기
         await asyncio.sleep(5)
 
         html = await page.get_content()
         print(f"[성공] HTML 수집 완료! (길이: {len(html)}자)")
         return html
+        
+    except Exception as e:
+        print(f"[에러] nodriver 구동 중 오류 발생: {e}")
+        return None
     finally:
-        browser.stop()
+        # 좀비 프로세스가 남지 않도록 안전하게 종료
+        try:
+            await browser.stop()
+        except:
+            pass
         
 ############################################# html parsing function ##################################################
 def parse_html_basic(html_content):
@@ -154,7 +175,7 @@ def parse_html_basic(html_content):
 
     return product_info
 
-def parse_html_jwith_son_ld(html_content):
+def parse_html_with_json_ld(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
     
     product_info = {
@@ -320,11 +341,10 @@ if __name__ == "__main__":
                 'fetching' : 'https://fetching.co.kr/product/58383691/%EC%8A%A4%EB%8B%88%EC%BB%A4%EC%A6%88%20V-S1%20%EC%BB%A8%ED%83%9D%ED%8A%B8%20%EB%B8%94%EB%9E%99', 
                 'fruitsfamily' : 'https://fruitsfamily.com/product/5qjtk/12fw-%EB%B0%B1%EC%8A%A4%ED%8B%B0%EC%B9%98-%EB%B8%8C%EC%9D%B4%EB%84%A5-%EB%8B%88%ED%8A%B8'
                 }
-    url = url_dict['musinsa']
-    html_content = get_html_from_url(url) 
-    #html_content = uc.loop().run_until_complete(get_html_from_browser(url))
-    print(html_content)
-    result = parse_musinsa_html(html_content)
+    url = url_dict['fetching']
+    #html_content = get_html_from_url(url) 
+    html_content = uc.loop().run_until_complete(get_html_from_browser(url))
+    result = parse_html_with_json_ld(html_content)
     print(result)
 
 
