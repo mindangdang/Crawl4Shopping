@@ -13,12 +13,12 @@ import sys
 import nodriver as uc
 import traceback
 
-def get_html_from_url(url):
+def get_html_from_url(url: str, proxy=None):
     parsed_url = urlparse(url)
     domain = parsed_url.netloc
     origin = f"{parsed_url.scheme}://{domain}"
     target_chrome = "chrome124"
-    proxy = None
+    proxy = proxy
 
     # 1.Chrome의 실제 헤더 순서와 구조 모사
     custom_headers = {
@@ -86,8 +86,7 @@ def get_html_from_url(url):
         print(f"[에러] 예기치 못한 시스템 오류: {e}")
         return None
 
-# 프록시 추가하기
-async def get_html_from_browser(url: str):
+async def get_html_from_browser(proxy_address: str, url: str):
     chrome_path = "/usr/bin/google-chrome"
     print("[정보] 코드스페이스 환경에서 크롬 가동 중...")
     
@@ -95,6 +94,8 @@ async def get_html_from_browser(url: str):
     config.browser_executable_path = chrome_path
     config.headless = True
     config.sandbox = False
+    config.browser_args.append(f"--proxy-server={proxy_address}")
+    config.browser_args.append("--disable-dev-shm-usage")
 
     browser = None
     try:
@@ -110,18 +111,16 @@ async def get_html_from_browser(url: str):
         
     except Exception as e:
         print(f"[에러] nodriver 구동 중 오류 발생: {e}")
-        traceback.print_exc()
+        #traceback.print_exc()
         return None
 
     finally:
         if browser:
             try:
-                browser.stop()
-            except:
-                try:
-                    await browser.stop()
-                except:
-                    pass
+                await browser.stop()
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                print(f"[경고] 브라우저 종료 중 예외 발생(무시 가능): {e}")
         
 ############################################# html parsing function ##################################################
 def parse_html_basic(html_content):
@@ -330,20 +329,58 @@ def parse_musinsa_html(html_content):
 
 ########################################################################################################################
 
-def product_crawler(url):
-    html_content = get_html_from_url(url)
-    result = None
-    if html_content is None:
-        html_content = uc.loop().run_until_complete(get_html_from_browser(url))
+async def product_crawler(url):
+    proxify_url = "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/http/data.txt"
+    proxy_list = []
     
+    try:
+        response = requests.get(proxify_url, timeout=5) 
+        if response.status_code == 200:
+            proxy_list = response.text.strip().split("\n")
+            print(f"[정보] 총 {len(proxy_list)}개의 무료 프록시를 가져왔습니다.")
+    except Exception as e:
+        print(f"[경고] 프록시 리스트를 가져오는데 실패했습니다: {e}")
+
+    max_retries = 5  
+    retry_count = 0
+    html_content = None
+    
+    while html_content is None and retry_count < max_retries:
+        retry_count += 1
+        
+        if proxy_list:
+            chosen_proxy = random.choice(proxy_list)
+            print(f"[시도 {retry_count}/{max_retries}] 선택된 프록시: {chosen_proxy}")
+        else:
+            chosen_proxy = None
+            print(f"[시도 {retry_count}/{max_retries}] 사용할 수 있는 프록시 리스트가 없어 프록시 없이 시도합니다.")
+
+        html_content = get_html_from_url(url, proxy=chosen_proxy)
+        if html_content is None:
+            print(f"[실패] curl_cffi로 HTML을 가져오는데 실패했습니다. nodriver로 재시도합니다.")
+            html_content = await get_html_from_browser(chosen_proxy, url)
+        
+        if html_content is None:
+            print(f"[실패] 해당 프록시({chosen_proxy})가 죽었거나 차단되었습니다. 다른 프록시로 재시도합니다.")
+            if chosen_proxy in proxy_list:
+                proxy_list.remove(chosen_proxy)
+
+    result = None
     if html_content is not None:
+        print(f"[성공] 최종 HTML 확보 완료. 파싱을 시작합니다.")
+        
         result = parse_html_basic(html_content)
         if result is None:
             result = parse_html_with_json_ld(html_content)
             if result is None:
                 result = parse_html_with_opengraph(html_content)
-
-    return result
+        
+        if result is not None:
+            print(f"[성공] HTML 파싱 완료")
+            return result
+    else:
+        print("[최종 실패] 모든 재시도가 실패했으며 HTML을 가져오지 못했습니다.")
+        return None
 
 
 if __name__ == "__main__":
@@ -353,9 +390,10 @@ if __name__ == "__main__":
                 'fruitsfamily' : 'https://fruitsfamily.com/product/5qjtk/12fw-%EB%B0%B1%EC%8A%A4%ED%8B%B0%EC%B9%98-%EB%B8%8C%EC%9D%B4%EB%84%A5-%EB%8B%88%ED%8A%B8',
                 'jaded' : 'https://jadedldn.com/en-kr/products/product-of-age-cinch-back-xl-colossus'
                 }
-    url = url_dict['jaded']
-    result = product_crawler(url)
+    url = url_dict['fruitsfamily']
+    result = asyncio.run(product_crawler(url))
     print(result)
+  
 
 
 
