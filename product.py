@@ -11,6 +11,7 @@ import random
 import asyncio
 import sys
 import nodriver as uc
+import traceback
 
 def get_html_from_url(url):
     parsed_url = urlparse(url)
@@ -90,46 +91,28 @@ async def get_html_from_browser(url: str):
     chrome_path = "/usr/bin/google-chrome"
     print("[정보] 코드스페이스 환경에서 크롬 가동 중...")
     
-    # 1. Config 객체 생성
     config = uc.Config()
     config.browser_executable_path = chrome_path
-    
-    # 기본 헤드리스 활성화
     config.headless = True
-    
-    # [핵심 우회책] nodriver의 인자 제한을 우회하여 --no-sandbox 강제 주입
-    # 라이브러리가 벤하는 것을 막기 위해 사전에 정의된 인자 리스트에 직접 튜닝합니다.
-    if not hasattr(config, "is_sandbox"): 
-        # 단단히 잠긴 sandbox 옵션을 끄고, 환경 변수 및 인자 직접 할당
-        config.sandbox = False
-
-    # 리눅스 컨테이너(Codespaces) 환경 맞춤형 필수 인자 직접 주입
-    config.add_argument("--disable-dev-shm-usage")
-    config.add_argument("--disable-gpu")
-    config.add_argument("--remote-debugging-port=9222")
-    config.add_argument("--log-level=3")
-    
-    # 만약 위의 설정으로도 에러가 나면, 아래 한 줄을 추가해 완전히 강제 우회합니다.
-    config.options = {"args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]}
+    config.sandbox = False
 
     browser = None
     try:
-        # 2. 브라우저 시작
-        browser = await uc.start(config)
-        
+        browser = await uc.start(config=config)
         print("[정보] 타겟 페이지 이동 중...")
         page = await browser.get(url)
 
-        # 페이지가 완전히 로드될 때까지 대기
         await asyncio.sleep(5)
-
         html = await page.get_content()
         print(f"[성공] HTML 수집 완료! (길이: {len(html)}자)")
+
         return html
         
     except Exception as e:
         print(f"[에러] nodriver 구동 중 오류 발생: {e}")
+        traceback.print_exc()
         return None
+
     finally:
         if browser:
             try:
