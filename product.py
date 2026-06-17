@@ -85,27 +85,34 @@ def get_html_from_url(url):
         print(f"[에러] 예기치 못한 시스템 오류: {e}")
         return None
 
+# 프록시 추가하기
 async def get_html_from_browser(url: str):
     chrome_path = "/usr/bin/google-chrome"
     print("[정보] 코드스페이스 환경에서 크롬 가동 중...")
     
-    # 1. Config 객체를 이용해 도커/리눅스 환경 최적화 인자 주입
+    # 1. Config 객체 생성
     config = uc.Config()
     config.browser_executable_path = chrome_path
     
-    # nodriver 전용 보안 속성 해제
-    config.sandbox = False
+    # 기본 헤드리스 활성화
     config.headless = True
     
-    # [핵심] 리눅스 컨테이너 환경에서 CDP 연결 안정화를 위한 필수 인자들
+    # [핵심 우회책] nodriver의 인자 제한을 우회하여 --no-sandbox 강제 주입
+    # 라이브러리가 벤하는 것을 막기 위해 사전에 정의된 인자 리스트에 직접 튜닝합니다.
+    if not hasattr(config, "is_sandbox"): 
+        # 단단히 잠긴 sandbox 옵션을 끄고, 환경 변수 및 인자 직접 할당
+        config.sandbox = False
+
+    # 리눅스 컨테이너(Codespaces) 환경 맞춤형 필수 인자 직접 주입
     config.add_argument("--disable-dev-shm-usage")
     config.add_argument("--disable-gpu")
-    config.add_argument("--remote-debugging-port=9222") # 디버깅 포트 고정
-    config.add_argument("--remote-debugging-address=0.0.0.0") # 바인딩 주소 확장
+    config.add_argument("--remote-debugging-port=9222")
+    config.add_argument("--log-level=3")
     
-    # d-bus 관련 무의미한 에러 로그가 파이썬 스트림을 방해하지 않도록 차단
-    config.add_argument("--log-level=3") 
+    # 만약 위의 설정으로도 에러가 나면, 아래 한 줄을 추가해 완전히 강제 우회합니다.
+    config.options = {"args": ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]}
 
+    browser = None
     try:
         # 2. 브라우저 시작
         browser = await uc.start(config)
@@ -113,7 +120,7 @@ async def get_html_from_browser(url: str):
         print("[정보] 타겟 페이지 이동 중...")
         page = await browser.get(url)
 
-        # 페이지가 완전히 로드될 때까지 충분히 대기
+        # 페이지가 완전히 로드될 때까지 대기
         await asyncio.sleep(5)
 
         html = await page.get_content()
@@ -124,11 +131,14 @@ async def get_html_from_browser(url: str):
         print(f"[에러] nodriver 구동 중 오류 발생: {e}")
         return None
     finally:
-        # 좀비 프로세스가 남지 않도록 안전하게 종료
-        try:
-            await browser.stop()
-        except:
-            pass
+        if browser:
+            try:
+                browser.stop()
+            except:
+                try:
+                    await browser.stop()
+                except:
+                    pass
         
 ############################################# html parsing function ##################################################
 def parse_html_basic(html_content):
@@ -172,6 +182,9 @@ def parse_html_basic(html_content):
         # 하단 추천 상품 목록에 있는 'ProductPreview-sold'(품절 표시)와 헷갈리지 않도록 
         # 메인 구매 버튼의 텍스트와 상태로 판별합니다.
         product_info["is_available"] = True
+    
+    if not product_info["title"]:
+        return None
 
     return product_info
 
@@ -232,7 +245,6 @@ def parse_html_with_json_ld(html_content):
             # JSON 파싱 에러 등이 나면 다음 태그로 넘어감
             continue
 
-    # 검증: 핵심 데이터인 title이 비어있다면 2단계 실패로 판단
     if not product_info["title"]:
         return None
 
@@ -335,16 +347,31 @@ def parse_musinsa_html(html_content):
 
 ########################################################################################################################
 
+def product_crawler(url):
+    html_content = get_html_from_url(url)
+    result = None
+    if html_content is None:
+        html_content = uc.loop().run_until_complete(get_html_from_browser(url))
+    
+    if html_content is not None:
+        result = parse_html_basic(html_content)
+        if result is None:
+            result = parse_html_with_json_ld(html_content)
+            if result is None:
+                result = parse_html_with_opengraph(html_content)
+
+    return result
+
+
 if __name__ == "__main__":
 
     url_dict = {'musinsa' : "https://www.musinsa.com/products/3513309", 
                 'fetching' : 'https://fetching.co.kr/product/58383691/%EC%8A%A4%EB%8B%88%EC%BB%A4%EC%A6%88%20V-S1%20%EC%BB%A8%ED%83%9D%ED%8A%B8%20%EB%B8%94%EB%9E%99', 
-                'fruitsfamily' : 'https://fruitsfamily.com/product/5qjtk/12fw-%EB%B0%B1%EC%8A%A4%ED%8B%B0%EC%B9%98-%EB%B8%8C%EC%9D%B4%EB%84%A5-%EB%8B%88%ED%8A%B8'
+                'fruitsfamily' : 'https://fruitsfamily.com/product/5qjtk/12fw-%EB%B0%B1%EC%8A%A4%ED%8B%B0%EC%B9%98-%EB%B8%8C%EC%9D%B4%EB%84%A5-%EB%8B%88%ED%8A%B8',
+                'jaded' : 'https://jadedldn.com/en-kr/products/product-of-age-cinch-back-xl-colossus'
                 }
-    url = url_dict['fetching']
-    #html_content = get_html_from_url(url) 
-    html_content = uc.loop().run_until_complete(get_html_from_browser(url))
-    result = parse_html_with_json_ld(html_content)
+    url = url_dict['jaded']
+    result = product_crawler(url)
     print(result)
 
 
