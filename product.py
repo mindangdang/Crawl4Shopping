@@ -102,8 +102,13 @@ async def get_html_from_browser(proxy_address: str, url: str):
         browser = await uc.start(config=config)
         print("[정보] 타겟 페이지 이동 중...")
         page = await browser.get(url)
+        await page.evaluate("""
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+        """)
 
-        await asyncio.sleep(5)
+        await asyncio.sleep(15)
         html = await page.get_content()
         print(f"[성공] HTML 수집 완료! (길이: {len(html)}자)")
 
@@ -118,7 +123,7 @@ async def get_html_from_browser(proxy_address: str, url: str):
         if browser:
             try:
                 await browser.stop()
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(1)
             except Exception as e:
                 print(f"[경고] 브라우저 종료 중 예외 발생(무시 가능): {e}")
         
@@ -330,7 +335,7 @@ def parse_musinsa_html(html_content):
 ########################################################################################################################
 
 async def product_crawler(url):
-    proxify_url = "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/protocols/http/data.txt"
+    proxify_url = "http://pubproxy.com/api/proxy?country=KR&type=http&anon=elite"
     proxy_list = []
     
     try:
@@ -341,7 +346,7 @@ async def product_crawler(url):
     except Exception as e:
         print(f"[경고] 프록시 리스트를 가져오는데 실패했습니다: {e}")
 
-    max_retries = 5  
+    max_retries = 15  
     retry_count = 0
     html_content = None
     
@@ -367,7 +372,7 @@ async def product_crawler(url):
 
     result = None
     if html_content is not None:
-        print(f"[성공] 최종 HTML 확보 완료. 파싱을 시작합니다.")
+        print(f"[성공] 최종 HTML 확보 완료. 파싱을 시작합니다. {html_content}")
         
         result = parse_html_basic(html_content)
         if result is None:
@@ -390,7 +395,7 @@ if __name__ == "__main__":
                 'fruitsfamily' : 'https://fruitsfamily.com/product/5qjtk/12fw-%EB%B0%B1%EC%8A%A4%ED%8B%B0%EC%B9%98-%EB%B8%8C%EC%9D%B4%EB%84%A5-%EB%8B%88%ED%8A%B8',
                 'jaded' : 'https://jadedldn.com/en-kr/products/product-of-age-cinch-back-xl-colossus'
                 }
-    url = url_dict['fruitsfamily']
+    url = url_dict['jaded']
     result = asyncio.run(product_crawler(url))
     print(result)
   
